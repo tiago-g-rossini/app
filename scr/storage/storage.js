@@ -11,8 +11,8 @@ export async function storageGet(chave, valorPadrao) {
 
 export async function storageSet(chave, valor) {
   try {
-    await AsyncStorage.setItem(chave, JSON.stringify(valor));
-  } catch {
-    /* silencioso */
+    await AsyncStorage.setItem(chave, JSON.stringify(valor ?? null));
+  } catch (e) {
+    // silencioso — evita derrubar o app por causa de storage
   }
 }

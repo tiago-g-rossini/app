@@ -930,6 +930,8 @@ function AppInterno() {
             </View>
           </View>
         </Modal>
+
+        {modalSair}
       </SafeAreaView>
     </View>
   );
