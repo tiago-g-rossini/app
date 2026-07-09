@@ -50,6 +50,7 @@ export default function TelaSessao({ sessao, diaLabel, aoVoltar, aoSalvar, aoExc
         series: r.series,
         repsTexto: r.repsTexto,
         peso: !isNaN(valor) && valor > 0 ? valor : 0,
+        pesosPorSerie: r.pesosPorSerie, // preserva o detalhe por série (não editado nesta tela)
       };
     });
     aoSalvar(novosRegistros);

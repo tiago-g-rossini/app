@@ -33,7 +33,7 @@ export default function TelaTreino({
   aoAdicionarSerieExtraPara,
   aoPularDescanso,
   aoAjustarDescanso,
-  aoAtualizarPeso,
+  aoAtualizarPesoSerie,
   aoMinimizar,
   aoCancelar,
   aoFinalizar,
@@ -64,14 +64,15 @@ export default function TelaTreino({
     return () => clearInterval(t);
   }, [treinoConcluido, sessao.inicio]);
 
-  function valorPeso(ex) {
+  function valorPesoSerie(ex, serieChave) {
     if (!ex) return "";
-    if (pesosSessao && pesosSessao[ex.id] !== undefined) return pesosSessao[ex.id];
+    const mapa = pesosSessao?.[ex.id];
+    if (mapa && mapa[serieChave] !== undefined) return mapa[serieChave];
     return pesosAtuais[ex.id] ? String(pesosAtuais[ex.id]) : "";
   }
 
-  function onMudarPeso(exId, valor) {
-    aoAtualizarPeso(exId, valor.replace(/[^0-9.,]/g, ""));
+  function onMudarPesoSerie(exId, serieChave, valor) {
+    aoAtualizarPesoSerie(exId, serieChave, valor.replace(/[^0-9.,]/g, ""));
   }
 
   // Contador visual do descanso — recalcula com base no horário real de
@@ -162,17 +163,20 @@ export default function TelaTreino({
               return (
                 <View style={styles.card} key={ex.id}>
                   <Text style={styles.exNome}>{ex.nome}</Text>
-                  <View style={styles.pesoLinha}>
-                    <Text style={styles.pesoLabel}>peso usado (kg)</Text>
-                    <TextInput
-                      style={styles.pesoInput}
-                      keyboardType="numeric"
-                      value={valorPeso(ex)}
-                      onChangeText={(v) => onMudarPeso(ex.id, v)}
-                      placeholder="0"
-                      placeholderTextColor={cores.textoDim}
-                    />
-                  </View>
+
+                  {Array.from({ length: ex.series }).map((_, i) => (
+                    <View style={styles.pesoLinha} key={i}>
+                      <Text style={styles.pesoLabel}>série {i + 1} (kg)</Text>
+                      <TextInput
+                        style={styles.pesoInput}
+                        keyboardType="numeric"
+                        value={valorPesoSerie(ex, String(i))}
+                        onChangeText={(v) => onMudarPesoSerie(ex.id, String(i), v)}
+                        placeholder="0"
+                        placeholderTextColor={cores.textoDim}
+                      />
+                    </View>
+                  ))}
 
                   <View style={styles.reviewSeriesLinha}>
                     <Text style={styles.reviewSeriesTexto}>
@@ -240,15 +244,25 @@ export default function TelaTreino({
           <Text style={styles.subtexto}>{exercicioAtual.reps} reps</Text>
 
           <View style={styles.pesoInlineLinha}>
-            <Text style={styles.pesoInlineLabel}>peso (kg)</Text>
+
+            <Text style={styles.pesoInlineLabel}>peso da série {seriesDoAtual + 1} (kg)</Text>
+
             <TextInput
+
               style={styles.pesoInlineInput}
+
               keyboardType="numeric"
-              value={valorPeso(exercicioAtual)}
-              onChangeText={(v) => onMudarPeso(exercicioAtual.id, v)}
+
+              value={valorPesoSerie(exercicioAtual, String(seriesDoAtual))}
+
+              onChangeText={(v) => onMudarPesoSerie(exercicioAtual.id, String(seriesDoAtual), v)}
+
               placeholder="0"
+
               placeholderTextColor={cores.textoDim}
+
             />
+
           </View>
 
           <View style={styles.serieDots}>

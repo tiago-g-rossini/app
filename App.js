@@ -107,10 +107,65 @@ function repsNumero(repsTexto) {
 }
 
 function volumeDaSessao(sessao) {
-  return (sessao.registros || []).reduce(
-    (acc, r) => acc + (r.peso || 0) * (r.series || 0) * repsNumero(r.repsTexto),
-    0
-  );
+  return (sessao.registros || []).reduce((acc, r) => {
+    const reps = repsNumero(r.repsTexto);
+    if (r.pesosPorSerie) {
+      const somaPesos = Object.values(r.pesosPorSerie).reduce((a, p) => a + (p || 0), 0);
+      return acc + somaPesos * reps;
+    }
+    return acc + (r.peso || 0) * (r.series || 0) * reps;
+  }, 0);
+}
+
+// Maior peso entre as séries registradas de um exercício nesta sessão — usado
+// tanto para o "peso recorde" quanto para a "última carga", em vez do peso da
+// última série editada (comportamento antigo, que você reportou como errado).
+function maiorPesoDoMapa(mapaPesos) {
+  const valores = Object.values(mapaPesos || {})
+    .map((v) => parseFloat(String(v).replace(",", ".")))
+    .filter((v) => !isNaN(v) && v > 0);
+  return valores.length ? Math.max(...valores) : 0;
+}
+
+// Peso da última série registrada (maior índice do mapa) — é isso que
+// representa "última carga usada", diferente do maior peso (que é o recorde).
+function pesoUltimaSerieDoMapa(mapaPesos) {
+  const indices = Object.keys(mapaPesos || {})
+    .map(Number)
+    .filter((n) => !isNaN(n));
+  if (indices.length === 0) return 0;
+  const maiorIndice = Math.max(...indices);
+  return mapaPesos[String(maiorIndice)] || 0;
+}
+
+
+
+// Constrói o mapa inicial de pesos por série ao começar um treino: cada série
+// herda o próprio último peso salvo dela; se não existir, herda o da série
+// anterior mais próxima que já tenha valor, e por fim cai para o peso "geral"
+// que o app já guardava antes desse recurso existir.
+function construirPesosIniciaisExercicio(ex, pesosSeriesSalvos, pesoGeral) {
+  const salvos = pesosSeriesSalvos?.[ex.id] || {};
+  const mapa = {};
+  let ultimoConhecido = pesoGeral != null ? String(pesoGeral) : "";
+  for (let i = 0; i < ex.series; i++) {
+    const chave = String(i);
+    if (salvos[chave] != null) {
+      mapa[chave] = String(salvos[chave]);
+      ultimoConhecido = mapa[chave];
+    } else {
+      mapa[chave] = ultimoConhecido;
+    }
+  }
+  return mapa;
+}
+
+function construirPesosIniciaisSessao(listaExercicios, pesosSeriesSalvos, pesosGerais) {
+  const resultado = {};
+  listaExercicios.forEach((ex) => {
+    resultado[ex.id] = construirPesosIniciaisExercicio(ex, pesosSeriesSalvos, pesosGerais[ex.id]);
+  });
+  return resultado;
 }
 
 function inicioDaSemana() {
@@ -132,18 +187,24 @@ function inicioDaSemana() {
 function recalcularPesosERecordes(sessoes) {
   const pesos = {};
   const recordes = {};
+  const pesosSeries = {};
   const emOrdem = [...sessoes].sort((a, b) => a.data.localeCompare(b.data));
   emOrdem.forEach((s) => {
     (s.registros || []).forEach((r) => {
-      if (r.peso > 0) {
-        pesos[r.id] = r.peso; // sessões em ordem crescente de data, então o último vence
-        if (r.peso > (recordes[r.id]?.peso || 0)) {
-          recordes[r.id] = { peso: r.peso, data: s.data };
-        }
+      if (r.peso > 0 && r.peso > (recordes[r.id]?.peso || 0)) {
+        recordes[r.id] = { peso: r.peso, data: s.data };
+      }
+      // "última carga" = peso da ÚLTIMA série feita (não o maior da sessão)
+      const pesoUltimaSerie = pesoUltimaSerieDoMapa(r.pesosPorSerie) || r.peso;
+      if (pesoUltimaSerie > 0) {
+        pesos[r.id] = pesoUltimaSerie;
+      }
+      if (r.pesosPorSerie) {
+        pesosSeries[r.id] = { ...(pesosSeries[r.id] || {}), ...r.pesosPorSerie };
       }
     });
   });
-  return { pesos, recordes };
+  return { pesos, recordes, pesosSeries };
 }
 
 function AppInterno() {
@@ -163,6 +224,7 @@ function AppInterno() {
   const [plano, setPlano] = useState(null);
   const [titulos, setTitulos] = useState({});
   const [pesos, setPesos] = useState({});
+  const [pesosSeries, setPesosSeries] = useState({}); // peso salvo por série, por exercício
   const [recordes, setRecordes] = useState({});
   const [sessoes, setSessoes] = useState([]);
 
@@ -186,10 +248,11 @@ function AppInterno() {
   const descansandoAnteriorRef = useRef(false);
 
   const carregarTudo = useCallback(async () => {
-    const [pl, tt, p, r, s, sessaoSalva] = await Promise.all([
+    const [pl, tt, p, ps, r, s, sessaoSalva] = await Promise.all([
       storageGet("plano_v2", null),
       storageGet("titulos_dias", {}),
       storageGet("pesos", {}),
+      storageGet("pesos_series", {}),
       storageGet("recordes", {}),
       storageGet("sessoes", []),
       storageGet("sessao_ativa", null),
@@ -203,6 +266,7 @@ function AppInterno() {
     }
     setTitulos(tt);
     setPesos(p);
+    setPesosSeries(ps);
     setRecordes(r);
     setSessoes(s);
     if (sessaoSalva) {
@@ -318,7 +382,7 @@ function AppInterno() {
       indiceAtual: 0,
       seriesFeitas: {},
       seriesExtras: {}, // FIX: estado inicial para contagem de séries extra (drop set)
-      pesosSessao: {},
+      pesosSessao: construirPesosIniciaisSessao(exercicios, pesosSeries, pesos),
       descansando: false,
       descansoFim: null,
       descansoDuracao: 0,
@@ -403,10 +467,27 @@ function AppInterno() {
     });
   }
 
-  function atualizarPesoSessao(exId, valor) {
+  // Atualiza o peso de uma série específica. Séries seguintes ainda não
+  // concluídas herdam esse valor automaticamente (cascata ao vivo) — depois
+  // de salvo o treino, cada série mantém só o que foi realmente registrado.
+  function atualizarPesoSerie(exId, serieChave, valor) {
     setSessaoAtiva((prev) => {
       if (!prev) return prev;
-      return { ...prev, pesosSessao: { ...(prev.pesosSessao || {}), [exId]: valor } };
+      const listaAtual = plano[prev.diaKey] || [];
+      const ex = listaAtual.find((e) => e.id === exId);
+      const mapaAtual = { ...(prev.pesosSessao[exId] || {}) };
+      mapaAtual[serieChave] = valor;
+
+      const indiceEditado = Number(serieChave);
+      if (ex && !Number.isNaN(indiceEditado)) {
+        const feitas = prev.seriesFeitas[exId] || 0;
+        for (let i = indiceEditado + 1; i < ex.series; i++) {
+          if (i < feitas) continue;
+          mapaAtual[String(i)] = valor;
+        }
+      }
+
+      return { ...prev, pesosSessao: { ...prev.pesosSessao, [exId]: mapaAtual } };
     });
   }
 
@@ -425,12 +506,24 @@ function AppInterno() {
     if (!sessaoAtiva) return;
     const listaAtual = plano[sessaoAtiva.diaKey] || [];
     const hojeIso = isoDeData(new Date());
-
     const registros = listaAtual.map((ex) => {
-      const bruto = sessaoAtiva.pesosSessao?.[ex.id];
-      const valor = parseFloat((bruto || "").replace(",", "."));
-      const pesoFinal = !isNaN(valor) && valor > 0 ? valor : pesos[ex.id] || 0;
-      return { id: ex.id, nome: ex.nome, peso: pesoFinal, series: ex.series, repsTexto: ex.reps };
+      const mapaBruto = sessaoAtiva.pesosSessao?.[ex.id] || {};
+      const pesosPorSerie = {};
+      Object.entries(mapaBruto).forEach(([chave, bruto]) => {
+        const valor = parseFloat(String(bruto || "").replace(",", "."));
+        if (!isNaN(valor) && valor > 0) {
+          pesosPorSerie[chave] = valor;
+        }
+      });
+      const maiorPeso = maiorPesoDoMapa(mapaBruto) || pesos[ex.id] || 0;
+      return {
+        id: ex.id,
+        nome: ex.nome,
+        peso: maiorPeso,
+        series: ex.series,
+        repsTexto: ex.reps,
+        pesosPorSerie,
+      };
     });
 
     const duracaoSegundos = sessaoAtiva.inicio
@@ -446,19 +539,22 @@ function AppInterno() {
     // FIX: pesos/recordes agora são sempre recalculados a partir de todas as
     // sessões (em vez de só comparar com o estado anterior), então o
     // comportamento fica idêntico ao de editar/excluir uma sessão antiga.
-    const { pesos: pesosAtualizados, recordes: recordesAtualizados } =
+    const { pesos: pesosAtualizados, recordes: recordesAtualizados, pesosSeries: pesosSeriesAtualizados } =
       recalcularPesosERecordes(novasSessoes);
 
     setPesos(pesosAtualizados);
     setRecordes(recordesAtualizados);
+    setPesosSeries(pesosSeriesAtualizados);
     setSessoes(novasSessoes);
     setSessaoAtiva(null);
 
     await Promise.all([
       storageSet("pesos", pesosAtualizados),
       storageSet("recordes", recordesAtualizados),
+      storageSet("pesos_series", pesosSeriesAtualizados),
       storageSet("sessoes", novasSessoes),
     ]);
+
     setTela("inicio");
   }
 
@@ -516,19 +612,22 @@ function AppInterno() {
     const novasSessoes = sessoes.map((s) =>
       s.data === data && s.diaKey === diaKey ? { ...s, registros: novosRegistros } : s
     );
-    const { pesos: pesosAtualizados, recordes: recordesAtualizados } =
+    const { pesos: pesosAtualizados, recordes: recordesAtualizados, pesosSeries: pesosSeriesAtualizados } =
       recalcularPesosERecordes(novasSessoes);
 
     setSessoes(novasSessoes);
     setPesos(pesosAtualizados);
     setRecordes(recordesAtualizados);
+    setPesosSeries(pesosSeriesAtualizados);
     setSessaoSelecionadaChave(null);
 
     await Promise.all([
       storageSet("sessoes", novasSessoes),
       storageSet("pesos", pesosAtualizados),
       storageSet("recordes", recordesAtualizados),
+      storageSet("pesos_series", pesosSeriesAtualizados),
     ]);
+
     setTela("calendario");
   }
 
@@ -537,19 +636,22 @@ function AppInterno() {
     if (!sessaoSelecionadaChave) return;
     const { data, diaKey } = sessaoSelecionadaChave;
     const novasSessoes = sessoes.filter((s) => !(s.data === data && s.diaKey === diaKey));
-    const { pesos: pesosAtualizados, recordes: recordesAtualizados } =
+    const { pesos: pesosAtualizados, recordes: recordesAtualizados, pesosSeries: pesosSeriesAtualizados } =
       recalcularPesosERecordes(novasSessoes);
 
     setSessoes(novasSessoes);
     setPesos(pesosAtualizados);
     setRecordes(recordesAtualizados);
+    setPesosSeries(pesosSeriesAtualizados);
     setSessaoSelecionadaChave(null);
 
     await Promise.all([
       storageSet("sessoes", novasSessoes),
       storageSet("pesos", pesosAtualizados),
       storageSet("recordes", recordesAtualizados),
+      storageSet("pesos_series", pesosSeriesAtualizados),
     ]);
+
     setTela("calendario");
   }
 
@@ -600,7 +702,7 @@ function AppInterno() {
           aoAdicionarSerieExtraPara={adicionarSerieExtraPara}
           aoPularDescanso={pularDescanso}
           aoAjustarDescanso={ajustarDescanso}
-          aoAtualizarPeso={atualizarPesoSessao}
+          aoAtualizarPesoSerie={atualizarPesoSerie}
           aoMinimizar={() => setTela("inicio")}
           aoCancelar={confirmarCancelarSessao}
           aoFinalizar={handleFinalizarTreino}
@@ -774,8 +876,8 @@ function AppInterno() {
               {sessaoAtiva && sessaoAtiva.diaKey === dia.key
                 ? "Continuar treino"
                 : sessaoDeHoje
-                ? "Refazer treino de hoje"
-                : "Iniciar treino de hoje"}
+                  ? "Refazer treino de hoje"
+                  : "Iniciar treino de hoje"}
             </Text>
           </TouchableOpacity>
 
@@ -858,8 +960,8 @@ function AppInterno() {
                 {sessaoConcluida
                   ? "Treino concluído — toque para revisar e salvar"
                   : sessaoAtiva.descansando
-                  ? "Em descanso…"
-                  : exercicioAtualSessao?.nome || "Treino em andamento"}
+                    ? "Em descanso…"
+                    : exercicioAtualSessao?.nome || "Treino em andamento"}
               </Text>
             </View>
             {!sessaoConcluida && (
